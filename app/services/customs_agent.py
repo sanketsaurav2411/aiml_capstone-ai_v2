@@ -596,41 +596,6 @@ class CustomsAgentService:
                 "citations": [],
             }
 
-        # Build citations list
-        citations: list[dict[str, Any]] = []
-        for it in items[:3]:
-            citations.append(
-                {
-                    "source_type": "tariff_item",
-                    "id": it["id"],
-                    "title": f"ITC-HS 2022 Tariff Item {it['metadata'].get('code', '')}",
-                    "snippet": it["content"][:280],
-                    "score": it.get("score"),
-                }
-            )
-        for nt in notes[:2]:
-            citations.append(
-                {
-                    "source_type": "legal_note",
-                    "id": nt["id"],
-                    "title": f"Chapter {nt['metadata'].get('chapter', '')} {nt['metadata'].get('kind', 'Legal Note')}",
-                    "snippet": nt["content"][:280],
-                    "score": nt.get("score"),
-                }
-            )
-        for rl in rulings[:2]:
-            citations.append(
-                {
-                    "source_type": "ruling",
-                    "id": rl["id"],
-                    "title": str(rl["metadata"].get("order_ref") or rl["metadata"].get("source_file") or "Customs Ruling"),
-                    "snippet": rl["content"][:280],
-                    "authority": rl["metadata"].get("authority"),
-                    "authority_rank": rl["metadata"].get("precedence_rank"),
-                    "score": rl.get("score"),
-                }
-            )
-
         conflict_note = None
         if len(rulings) >= 2:
             ranks = [int(r["metadata"].get("precedence_rank") or 5) for r in rulings[:2]]
@@ -687,7 +652,7 @@ class CustomsAgentService:
                     "llm_ms": llm_ms,
                     "in_tok": in_tok,
                     "out_tok": out_tok,
-                    "citations": citations,
+                    "citations": [],
                 }
             wanted_code = re.sub(r"\D", "", str(chosen_payload.get("code_8d") or ""))
             matched = next((x for x in items if str(x["metadata"].get("code")) == wanted_code), None)
@@ -716,10 +681,58 @@ class CustomsAgentService:
 
         meta = selected_rec["metadata"]
         code_8d = str(meta.get("code") or "")
+        target_ch = code_8d[:2]
         confidence = float(
             (chosen_payload or {}).get("confidence_score")
             or min(0.96, max(0.72, float(selected_rec.get("score") or 0.85)))
         )
+
+        # Build chapter-aligned citations with the selected tariff item first
+        same_ch_items = [x for x in items if x["id"] != selected_rec["id"] and str(x["metadata"].get("code", "")).startswith(target_ch)]
+        cited_items = [selected_rec] + same_ch_items[:2]
+        if len(cited_items) < 3:
+            for x in items:
+                if x["id"] not in {c["id"] for c in cited_items}:
+                    cited_items.append(x)
+                if len(cited_items) >= 3:
+                    break
+
+        same_ch_notes = [n for n in notes if str(n["metadata"].get("chapter", "")) == target_ch]
+        same_ch_rulings = [r for r in rulings if str(r["metadata"].get("hs_chapter_primary", "")) == target_ch] or rulings
+
+        citations: list[dict[str, Any]] = []
+        for it in cited_items:
+            citations.append(
+                {
+                    "source_type": "tariff_item",
+                    "id": it["id"],
+                    "title": f"ITC-HS 2022 Tariff Item {it['metadata'].get('code', '')}",
+                    "snippet": it["content"][:280],
+                    "score": it.get("score") or 0.95,
+                }
+            )
+        for nt in same_ch_notes[:2]:
+            citations.append(
+                {
+                    "source_type": "legal_note",
+                    "id": nt["id"],
+                    "title": f"Chapter {nt['metadata'].get('chapter', '')} {nt['metadata'].get('kind', 'Legal Note')}",
+                    "snippet": nt["content"][:280],
+                    "score": nt.get("score"),
+                }
+            )
+        for rl in same_ch_rulings[:2]:
+            citations.append(
+                {
+                    "source_type": "ruling",
+                    "id": rl["id"],
+                    "title": str(rl["metadata"].get("order_ref") or rl["metadata"].get("source_file") or "Customs Ruling"),
+                    "snippet": rl["content"][:280],
+                    "authority": rl["metadata"].get("authority"),
+                    "authority_rank": rl["metadata"].get("precedence_rank"),
+                    "score": rl.get("score"),
+                }
+            )
 
         if confidence < ABSTENTION_CONFIDENCE_THRESHOLD:
             return {
@@ -734,12 +747,12 @@ class CustomsAgentService:
 
         gri_applied = (chosen_payload or {}).get("gri_applied") or ["GRI 1", "GRI 6"]
         notes_reasoning = (chosen_payload or {}).get("section_chapter_notes_reasoning") or (
-            f"Verified against Chapter {code_8d[:2]} Notes and Heading {code_8d[:4]} scope. "
-            + (notes[0]["content"][:220] if notes else "No exclusionary Section/Chapter Note overrides Heading specificity.")
+            f"Verified against Chapter {target_ch} Notes and Heading {code_8d[:4]} scope. "
+            + (same_ch_notes[0]["content"][:220] if same_ch_notes else "No exclusionary Section/Chapter Note overrides Heading specificity.")
         )
         prec_reasoning = (chosen_payload or {}).get("precedents_reasoning") or (
-            f"Reviewed {len(rulings)} precedent chunk(s); top authority: {rulings[0]['metadata'].get('authority')} ({rulings[0]['metadata'].get('source_file')})."
-            if rulings
+            f"Reviewed {len(same_ch_rulings)} precedent chunk(s); top authority: {same_ch_rulings[0]['metadata'].get('authority')} ({same_ch_rulings[0]['metadata'].get('source_file')})."
+            if same_ch_rulings
             else "No conflicting advance rulings found for this specification."
         )
         steps = (chosen_payload or {}).get("step_by_step_reasoning") or [
