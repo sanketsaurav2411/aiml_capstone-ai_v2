@@ -3,7 +3,8 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PORT=8001 \
-    CHROMA_PERSIST_DIR=/tmp/chroma_db
+    CHROMA_PERSIST_DIR=/tmp/chroma_db \
+    SQLITE_DB_PATH=/tmp/ai_sessions.sqlite
 
 WORKDIR /app
 
