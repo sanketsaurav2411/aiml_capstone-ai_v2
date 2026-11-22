@@ -1,20 +1,26 @@
 from __future__ import annotations
-from typing import List, Dict, Any
 
 import os
 from typing import Any
 
 import requests
 
+from app.config import GEMINI_API_KEY, GEMINI_MODEL
+
+
 class AnswerGenerator:
     """Generate a relevant answer from retrieved documents."""
 
-    def __init__(self, gemini_api_key: str | None = None) -> None:
-        self.gemini_api_key = gemini_api_key or os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")
+    def __init__(self, gemini_api_key: str | None = None, model: str | None = None) -> None:
+        self.gemini_api_key = gemini_api_key or GEMINI_API_KEY or os.getenv("OPENAI_API_KEY")
+        self.model = model or GEMINI_MODEL
 
     def generate(self, query: str, documents: list[dict[str, Any]]) -> str:
         if self.gemini_api_key:
-            return self._generate_with_gemini(query, documents)
+            try:
+                return self._generate_with_gemini(query, documents)
+            except Exception:
+                return self._generate_locally(query, documents)
         return self._generate_locally(query, documents)
 
     def _generate_locally(self, query: str, documents: list[dict[str, Any]]) -> str:
@@ -31,34 +37,34 @@ class AnswerGenerator:
         if not context:
             return "I found matching records, but their content is empty or unavailable."
 
-        answer = (
-            "Based on the retrieved context, here is a likely answer:\n\n"
+        return (
+            "Based on the retrieved Indian ITC-HS context, here is the relevant tariff evidence:\n\n"
             f"{context[:3000]}"
-            "\n\nIf you need a more precise answer, refine your query or provide more context."
+            "\n\nRefine your query or provide product specifications (material, function, end-use) for 8-digit classification."
         )
-        return answer
 
     def _generate_with_gemini(self, query: str, documents: list[dict[str, Any]]) -> str:
-        prompt = "You are a helpful assistant. Answer the user's question using only the provided context."
+        prompt = (
+            "You are an Indian Customs & ITC-HS 2022 Tariff Expert. "
+            "Answer the user's question using ONLY the provided context and cite the HS code or note."
+        )
         context = "\n\n".join(
             (document.get("content") or "").strip() for document in documents if document.get("content")
         )
-
         if not context:
             return self._generate_locally(query, documents)
 
         payload = {
             "system_instruction": {"parts": [{"text": prompt}]},
             "contents": [{"parts": [{"text": f"Question: {query}\n\nContext:\n{context}"}]}],
-            "generationConfig": {"temperature": 0.2},
+            "generationConfig": {"temperature": 0.1},
         }
-
         response = requests.post(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",
+            f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent",
             params={"key": self.gemini_api_key},
             headers={"Content-Type": "application/json"},
             json=payload,
-            timeout=20,
+            timeout=25,
         )
         response.raise_for_status()
         payload_data = response.json()

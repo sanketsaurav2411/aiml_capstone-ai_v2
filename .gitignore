@@ -7,3 +7,6 @@ __pycache__/
 .DS_Store
 
 /data/chroma_db_large
+data/*.sqlite
+data/chroma_db*
+!data/chroma_db_snapshot.tar.gz
